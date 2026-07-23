@@ -2,7 +2,7 @@
 
 > 从零学会看后台：怎么看日志、怎么定位 badcase、怎么知道系统好不好。
 >
-> 本文是 [log-management-guide.md](log-management-guide.md) + [badcase-review-guide.md](badcase-review-guide.md) + [detection-strategy.md](detection-strategy.md) 的实操整合。读完就能上手。
+> 本文是 [log-management-guide.md](to_log/log-management-guide.md) + [badcase-review-guide.md](to_log/badcase-review-guide.md) + [detection-strategy.md](detection-strategy.md) 的实操整合。读完就能上手。
 
 ---
 
@@ -564,10 +564,10 @@ curl http://localhost/specific/api/feedback/stats | python -m json.tool
 
 | 文档 | 内容 |
 |------|------|
-| [log-management-guide.md](log-management-guide.md) | 日志系统的详细设计（轮转策略、格式、存储管理） |
-| [badcase-review-guide.md](badcase-review-guide.md) | Badcase 复盘流程的原始版本 |
+| [log-management-guide.md](to_log/log-management-guide.md) | 日志系统的详细设计（轮转策略、格式、存储管理） |
+| [badcase-review-guide.md](to_log/badcase-review-guide.md) | Badcase 复盘流程的原始版本 |
 | [detection-strategy.md](detection-strategy.md) | 四条检测链路的架构设计 + 告警阈值 |
 | [hallucination-prevention.md](done/hallucination-prevention.md) | 五层幻觉防御 + Badcase 自动保存设计 |
-| [debug-report-2026-07-14.md](debug-report-2026-07-14.md) | 真实 debug 全链路记录（4 个 bug 的排查过程） |
+| [debug-report-2026-07-14.md](to_log/debug-report-2026-07-14.md) | 真实 debug 全链路记录（4 个 bug 的排查过程） |
 | [boundary.md](../boundary.md) | 约束规范与检查清单（Harness Engineering 落地文件） |
 | [PROGRESS.md](../PROGRESS.md) | 项目进度总结 + 待做事项 |

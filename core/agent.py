@@ -24,10 +24,11 @@ logger = logging.getLogger(__name__)
 
 class Agent:
 
-    def __init__(self, model, rag_service=None, session_store=None, config=None):
+    def __init__(self, model, rag_service=None, session_store=None, config=None, contract_store=None):
         self.model = model
         self.rag = rag_service
         self.sessions = session_store
+        self.contract_store = contract_store
         self.config = config
 
         # ── Context Engine（对话摘要 + 压缩 + L3 LLM提取 + PGVector持久化）──
@@ -113,6 +114,32 @@ class Agent:
 
         # ── 记忆注入 ──
         memory_context = await self._retrieve_memory(message)
+
+        # ── 加载上次契约（跨会话恢复）──
+        contract_ctx = ""
+        if self.contract_store and session_id:
+            try:
+                row = self.contract_store.get_latest(session_id)
+                if row and row.get("contract", {}).get("goal"):
+                    from services.handover_service import HandoverService
+                    last_contract = row["contract"]
+                    contract_ctx = f"\n## 📋 上次任务契约\n- 目标: {last_contract.get('goal', '')}\n"
+                    scope = last_contract.get("scope", {})
+                    if scope.get("in") or scope.get("in_"):
+                        contract_ctx += f"- 范围: {', '.join(scope.get('in', scope.get('in_', [])))}\n"
+                    if scope.get("out"):
+                        contract_ctx += f"- 不包含: {', '.join(scope['out'])}\n"
+                    decisions = last_contract.get("decisions", last_contract.get("constraints", []))
+                    if decisions:
+                        contract_ctx += f"- 约束: {'; '.join(decisions[:3])}\n"
+                    if last_contract.get("confirmed_by_user"):
+                        contract_ctx += "- 状态: 已确认\n"
+                    contract_ctx += "\n基于以上契约继续推进。如需修改契约内容，请直接说明。\n"
+                    logger.info(f"[Contract] 加载历史契约 session={session_id}")
+            except Exception as e:
+                logger.warning(f"[Contract] 加载历史契约失败 (非关键): {e}")
+        if contract_ctx:
+            extra_context = contract_ctx + "\n" + (extra_context or "")
 
         initial_state = await self._build_initial_state(
             message=message, module=module, background=background,
@@ -239,6 +266,32 @@ class Agent:
             yield {"event": "error", "data": {"detail": str(e)}}
             return
 
+        # ── 推送任务契约事件 ──
+        contract = plan.get("contract", {})
+        if contract and contract.get("goal"):
+            if self.contract_store:
+                try:
+                    self.contract_store.create(session_id, contract)
+                except Exception as e:
+                    logger.warning(f"[Contract] 保存失败 (非关键): {e}")
+            yield {"event": "contract", "data": {
+                "action": "draft",
+                "contract": contract,
+            }}
+
+        # ── 推送多 Agent 事件 ──
+        multi_perspectives = result.get("multi_agent_perspectives", {})
+        if multi_perspectives:
+            from services.multi_agent import format_panel_for_sse
+            for evt in format_panel_for_sse(multi_perspectives):
+                yield evt
+            synthesis = result.get("multi_agent_synthesis", "")
+            if synthesis:
+                yield {
+                    "event": "multi_agent_synthesis",
+                    "data": {"synthesis": synthesis},
+                }
+
         # ── 推送工具调用事件（如果有的话）──
         for tr in tool_results:
             yield {"event": "tool_start", "data": {
@@ -272,6 +325,18 @@ class Agent:
                 self.sessions.update_session(
                     session_id=session_id, completeness=completeness, status="completed",
                 )
+                # ── 标记契约为 executing 状态 ──
+                if self.contract_store and contract:
+                    try:
+                        cid = contract.get("contract_id")
+                        if not cid:
+                            cid = self.contract_store.get_latest(session_id)
+                            cid = cid.get("contract_id") if cid else None
+                        if cid:
+                            contract["status"] = "executing"
+                            self.contract_store.update(cid, contract, increment_version=False)
+                    except Exception as e:
+                        logger.warning(f"[Contract] 状态更新失败 (非关键): {e}")
                 yield {"event": "execute", "data": {
                     "type": "execute", "skill": module, "module": module,
                     "message": output, "tool_calls_made": len(tool_results),

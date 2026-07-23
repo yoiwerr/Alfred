@@ -563,7 +563,7 @@ ContextEngine (L1+L2+L3) 只覆盖**当前会话内**的记忆。会话结束后
 
 ## 九、Testing & Badcase — 驾驭的第九层
 
-> 详见 [badcase-review-guide.md](badcase-review-guide.md)
+> 详见 [badcase-review-guide.md](to_log/badcase-review-guide.md)
 
 ### 9.1 为什么传统单元测试不够？
 
@@ -670,7 +670,7 @@ Badcase 分析流程:
 | 6. Memory | 跨会话记忆 | SessionMemory + UserProfile + PGVector | [three-layer-memory-design.md](three-layer-memory-design.md) |
 | 7. Intent | 目标一致性 | 已锁定意图 + 工作记忆 + 主题切换检测 | [intent-recognition-fix.md](intent-recognition-fix.md) |
 | 8. Token | 成本控制 | 预算分配 + 节流策略 + 增量更新 | [token-management-guide.md](token-management-guide.md) |
-| 9. Testing | 持续改进 | Badcase 收集 + 根因分析 + 回归验证 | [badcase-review-guide.md](badcase-review-guide.md) |
+| 9. Testing | 持续改进 | Badcase 收集 + 根因分析 + 回归验证 | [badcase-review-guide.md](to_log/badcase-review-guide.md) |
 
 ---
 

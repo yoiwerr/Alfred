@@ -1,94 +1,28 @@
-root@iZ2zeex1aq4wc994aznivfZ:~/portal# docker compose logs specific-api --tail=40
-specific-api  |   File "/usr/local/lib/python3.12/contextlib.py", line 210, in __aenter__
-specific-api  |     return await anext(self.gen)
-specific-api  |            ^^^^^^^^^^^^^^^^^^^^^
-specific-api  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 232, in merged_lifespan
-specific-api  |     async with original_context(app) as maybe_original_state:
-specific-api  |                ^^^^^^^^^^^^^^^^^^^^^
-specific-api  |   File "/usr/local/lib/python3.12/contextlib.py", line 210, in __aenter__
-specific-api  |     return await anext(self.gen)
-specific-api  |            ^^^^^^^^^^^^^^^^^^^^^
-specific-api  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 232, in merged_lifespan
-specific-api  |     async with original_context(app) as maybe_original_state:
-specific-api  |                ^^^^^^^^^^^^^^^^^^^^^
-specific-api  |   File "/usr/local/lib/python3.12/contextlib.py", line 210, in __aenter__
-specific-api  |     return await anext(self.gen)
-specific-api  |            ^^^^^^^^^^^^^^^^^^^^^
-specific-api  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 232, in merged_lifespan
-specific-api  |     async with original_context(app) as maybe_original_state:
-specific-api  |                ^^^^^^^^^^^^^^^^^^^^^
-specific-api  |   File "/usr/local/lib/python3.12/contextlib.py", line 210, in __aenter__
-specific-api  |     return await anext(self.gen)
-specific-api  |            ^^^^^^^^^^^^^^^^^^^^^
-specific-api  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 232, in merged_lifespan
-specific-api  |     async with original_context(app) as maybe_original_state:
-specific-api  |                ^^^^^^^^^^^^^^^^^^^^^
-specific-api  |   File "/usr/local/lib/python3.12/contextlib.py", line 210, in __aenter__
-specific-api  |     return await anext(self.gen)
-specific-api  |            ^^^^^^^^^^^^^^^^^^^^^
-specific-api  |   File "/app/app.py", line 74, in lifespan
-specific-api  |     await rag.ensure_ready()
-specific-api  |   File "/app/services/rag_service.py", line 248, in ensure_ready
-specific-api  |     await self.store.ensure_tables()
-specific-api  |   File "/app/services/vector_store.py", line 121, in ensure_tables
-specific-api  |     """).format(sql.Identifier(coll_name), sql.Literal(dim)))
-specific-api  |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-specific-api  |   File "/usr/local/lib/python3.12/site-packages/psycopg/sql.py", line 284, in format
-specific-api  |     rv.append(args[autonum])
-specific-api  |               ~~~~^^^^^^^^^
-specific-api  | IndexError: tuple index out of range
-specific-api  |
-specific-api  | ERROR:    Application startup failed. Exiting.
-root@iZ2zeex1aq4wc994aznivfZ:~/portal# docker compose up -d --build api specific-api
-[+] Building 2.3s (23/23) FINISHED
- => [internal] load local bake definitions                                                                         0.0s
- => => reading from stdin 941B                                                                                     0.0s
- => [api internal] load build definition from Dockerfile                                                           0.0s
- => => transferring dockerfile: 951B                                                                               0.0s
- => [specific-api internal] load build definition from Dockerfile                                                  0.0s
- => => transferring dockerfile: 954B                                                                               0.0s
- => [specific-api internal] load metadata for docker.io/library/python:3.12-slim                                   0.3s
- => [api internal] load .dockerignore                                                                              0.0s
- => => transferring context: 140B                                                                                  0.0s
- => [specific-api internal] load .dockerignore                                                                     0.0s
- => => transferring context: 2B                                                                                    0.0s
- => [api 1/7] FROM docker.io/library/python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1  0.1s
- => => resolve docker.io/library/python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc8  0.1s
- => [specific-api internal] load build context                                                                     0.1s
- => => transferring context: 3.45kB                                                                                0.0s
- => [api internal] load build context                                                                              0.1s
- => => transferring context: 11.47kB                                                                               0.0s
- => CACHED [specific-api 2/7] WORKDIR /app                                                                         0.0s
- => CACHED [api 3/6] RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources     0.0s
- => CACHED [api 4/6] RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mir  0.0s
- => CACHED [api 5/6] RUN uv pip install --system --no-cache-dir     -i https://mirrors.aliyun.com/pypi/simple/ --  0.0s
- => [api 6/6] COPY . .                                                                                             0.1s
- => CACHED [specific-api 3/7] RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.s  0.0s
- => CACHED [specific-api 4/7] RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted  0.0s
- => CACHED [specific-api 5/7] RUN uv pip install --system --no-cache-dir     -i https://mirrors.aliyun.com/pypi/s  0.0s
- => CACHED [specific-api 6/7] COPY . .                                                                             0.0s
- => CACHED [specific-api 7/7] RUN mkdir -p /app/data && chmod 777 /app/data                                        0.0s
- => [specific-api] exporting to image                                                                              0.3s
- => => exporting layers                                                                                            0.0s
- => => exporting manifest sha256:b0c3aac41f43699e18f0d747f75ea03d903a39fad97622fa0daba06244be7c1a                  0.0s
- => => exporting config sha256:8c93f41216d99269c87244e60ae127d576d41c5b6a3b5668c83344a506a67c3a                    0.0s
- => => exporting attestation manifest sha256:b24c0533ea1bedef622efc3f07d4f34e4e10d91528631285b0d46fb6f174449f      0.1s
- => => exporting manifest list sha256:8038b7b2762c477dde1e86826d6c6faa99a8c5fde8ec4e5e2a6bb4ceee318ce8             0.0s
- => => naming to docker.io/library/portal-specific-api:latest                                                      0.0s
- => => unpacking to docker.io/library/portal-specific-api:latest                                                   0.0s
- => [api] exporting to image                                                                                       1.1s
- => => exporting layers                                                                                            0.9s
- => => exporting manifest sha256:2806a5efb649533d476189cb020650563598c23f0576e38487c366adfb29e0f3                  0.0s
- => => exporting config sha256:27d1586fbc6d6128596f1ba7563a30ade7b03591568d77b4b09f451d6b059bff                    0.0s
- => => exporting attestation manifest sha256:083788185b4839602ac1f063ff32e77173588f6bd12b16562163898542e10c93      0.0s
- => => exporting manifest list sha256:0f261af9c04c51e806712721c7bdc80a9bf12c00a1359a06c76b64ee40b7164b             0.0s
- => => naming to docker.io/library/portal-api:latest                                                               0.0s
- => => unpacking to docker.io/library/portal-api:latest                                                            0.1s
- => [specific-api] resolving provenance for metadata file                                                          0.0s
- => [api] resolving provenance for metadata file                                                                   0.0s
-[+] up 5/5
- ✔ Image portal-specific-api Built                                                                                  2.4s
- ✔ Image portal-api          Built                                                                                  2.4s
- ✔ Container chalab-postgres Healthy                                                                                3.5s
- ✔ Container chalab-api      Started                                                                                4.0s
- ✔ Container specific-api    Started
+yoiwerr@driiiiiizy:~/Alfred$ uv run python app.py
+Installed 86 packages in 58ms
+INFO:     Will watch for changes in these directories: ['/home/yoiwerr/Alfred']
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+INFO:     Started reloader process [76635] using WatchFiles
+INFO:     Started server process [76671]
+INFO:     Waiting for application startup.
+============================================================
+  Alfred — Provider: deepseek | Model: deepseek-v4-pro
+============================================================
+07-23 13:23:47 [INFO ] services.contract_store | [ContractStore] 表初始化完成
+07-23 13:23:47 [INFO ] services.vector_store | [PGVector] 创建表: knowledge_chunks
+07-23 13:23:47 [INFO ] services.vector_store | [PGVector] 创建索引: idx_knowledge_chunks_embedding
+07-23 13:23:47 [INFO ] services.vector_store | [PGVector] 创建全文索引: idx_knowledge_chunks_fts
+07-23 13:23:47 [ERROR] services.vector_store | [PGVector] 表初始化失败: could not determine data type of parameter $1
+  [FAIL] 启动失败 (部分功能不可用): could not determine data type of parameter $1
+Traceback (most recent call last):
+  File "/home/yoiwerr/Alfred/app.py", line 77, in lifespan
+    await rag.ensure_ready()
+  File "/home/yoiwerr/Alfred/services/rag_service.py", line 90, in ensure_ready
+    await self.store.ensure_tables()
+  File "/home/yoiwerr/Alfred/services/vector_store.py", line 177, in ensure_tables
+    cur.execute(sql.SQL(
+  File "/home/yoiwerr/Alfred/.venv/lib/python3.12/site-packages/psycopg/cursor.py", line 117, in execute
+    raise ex.with_traceback(None)
+psycopg.errors.IndeterminateDatatype: could not determine data type of parameter $1
+INFO:     Application startup complete.
+07-23 13:23:47 [INFO ] watchfiles.main | 87 changes detected

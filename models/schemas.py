@@ -46,6 +46,7 @@ class SSEEventType(str, Enum):
     TOOL_START = "tool_start"
     TOOL_END = "tool_end"
     CLARIFY = "clarify"
+    CONTRACT = "contract"
     EXECUTE = "execute"
     ERROR = "error"
     DONE = "done"
@@ -99,6 +100,30 @@ class ErrorEvent(BaseModel):
     """SSE error 事件"""
     detail: str
     code: str = "unknown"
+
+
+class ContractEvent(BaseModel):
+    """SSE contract 事件 — 任务契约草案/确认/更新"""
+    type: str = "contract"
+    action: str = Field(..., description="draft | confirm | update")
+    contract: dict = Field(default_factory=dict, description="TaskContract JSON")
+
+
+class ContractConfirmRequest(BaseModel):
+    """POST /api/chat/{id}/contract/confirm 请求体"""
+    session_id: str
+
+
+class ContractUpdateRequest(BaseModel):
+    """POST /api/chat/{id}/contract/update 请求体"""
+    goal: Optional[str] = None
+    scope: Optional[dict] = None
+    constraints: Optional[list[str]] = None
+    acceptance: Optional[list[str]] = None
+    risks: Optional[list[str]] = None
+    deliverables: Optional[dict] = None
+    permissions: Optional[dict] = None
+    confidence: Optional[float] = None
 
 
 class DoneEvent(BaseModel):

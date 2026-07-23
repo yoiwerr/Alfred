@@ -33,11 +33,12 @@ from config import config
 from services.session_store import SessionStore
 from services.vector_store import PGVectorStore, build_connection_string
 from services.rag_service import RAGService
+from services.contract_store import ContractStore
 from core.llm_client import create_model
 from core.agent import Agent
-from routers import chat, sessions, knowledge, feedback, files
+from routers import chat, sessions, knowledge, feedback, files, handover
 
-ss = None; rag = None; agent = None
+ss = None; rag = None; cs = None; agent = None
 
 
 @asynccontextmanager
@@ -59,6 +60,7 @@ async def lifespan(app: FastAPI):
         _vs = PGVectorStore(conn_string)
 
         ss = SessionStore(conn_string)
+        cs = ContractStore(conn_string)  # 任务契约持久化
 
         rag = RAGService(
             vector_store=_vs,
@@ -79,8 +81,8 @@ async def lifespan(app: FastAPI):
             await rag.ingest_knowledge_base()
 
         model = create_model(config)
-        agent = Agent(model=model, rag_service=rag, session_store=ss, config=config)
-        chat.set_agent(agent); sessions.set_agent(agent); knowledge.set_agent(agent); feedback.set_agent(agent)
+        agent = Agent(model=model, rag_service=rag, session_store=ss, config=config, contract_store=cs)
+        chat.set_agent(agent); sessions.set_agent(agent); knowledge.set_agent(agent); feedback.set_agent(agent); handover.set_agent(agent)
 
         print("  [OK] ready\n")
     except Exception as e:
@@ -93,12 +95,13 @@ async def lifespan(app: FastAPI):
 
     # 清理
     if ss is not None: ss.close()
+    if cs is not None: cs.close()
     if _vs is not None: _vs.close()
 
 
 app = FastAPI(title="Alfred", version="1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-app.include_router(chat.router); app.include_router(sessions.router); app.include_router(knowledge.router); app.include_router(feedback.router); app.include_router(files.router)
+app.include_router(chat.router); app.include_router(sessions.router); app.include_router(knowledge.router); app.include_router(feedback.router); app.include_router(files.router); app.include_router(handover.router)
 
 STATIC = ROOT / "static"
 

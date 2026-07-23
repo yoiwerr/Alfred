@@ -13,6 +13,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, Query
+from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from models.schemas import ChatRequest
@@ -143,6 +144,64 @@ async def _stream_chat_v2(request: ChatRequest):
             "event": "error",
             "data": json.dumps({"detail": f"处理消息失败: {str(e)}"})
         }
+
+
+# ============================================================
+# 任务契约操作
+# ============================================================
+
+@router.post("/{session_id}/contract/confirm")
+async def confirm_contract(session_id: str):
+    """用户确认任务契约。更新 contract_store 状态为 confirmed。"""
+    if _agent is None:
+        raise HTTPException(status_code=503, detail="Agent 未初始化")
+    if not _agent.contract_store:
+        raise HTTPException(status_code=501, detail="ContractStore 未启用")
+    row = _agent.contract_store.get_latest(session_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="当前会话没有契约")
+    contract_id = row["contract_id"]
+    confirmed = _agent.contract_store.confirm(contract_id, row["contract"])
+    return JSONResponse(content={"ok": True, "contract": confirmed})
+
+
+@router.post("/{session_id}/contract/update")
+async def update_contract(session_id: str, request: Request):
+    """用户修改契约字段（增量更新）。"""
+    if _agent is None:
+        raise HTTPException(status_code=503, detail="Agent 未初始化")
+    if not _agent.contract_store:
+        raise HTTPException(status_code=501, detail="ContractStore 未启用")
+    body = await request.json()
+    row = _agent.contract_store.get_latest(session_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="当前会话没有契约")
+    contract, contract_id = row["contract"], row["contract_id"]
+    # 增量合并
+    for f in ["goal", "confidence", "status"]:
+        if f in body: contract[f] = body[f]
+    if "scope" in body and isinstance(body["scope"], dict):
+        contract.setdefault("scope", {})
+        if "in" in body["scope"]: contract["scope"]["in"] = body["scope"]["in"]
+        if "out" in body["scope"]: contract["scope"]["out"] = body["scope"]["out"]
+    for lf in ["constraints", "acceptance", "risks"]:
+        if lf in body: contract[lf] = body[lf]
+    if "deliverables" in body: contract["deliverables"] = body["deliverables"]
+    if "permissions" in body: contract["permissions"] = body["permissions"]
+    contract["status"] = "draft"
+    _agent.contract_store.update(contract_id, contract, increment_version=True)
+    return JSONResponse(content={"ok": True, "contract": contract})
+
+
+@router.get("/{session_id}/contract")
+async def get_contract(session_id: str):
+    """获取当前会话契约（用于页面恢复）。"""
+    if _agent is None:
+        raise HTTPException(status_code=503, detail="Agent 未初始化")
+    if not _agent.contract_store:
+        raise HTTPException(status_code=501, detail="ContractStore 未启用")
+    row = _agent.contract_store.get_latest(session_id)
+    return JSONResponse(content={"ok": True, "contract": row["contract"] if row else None})
 
 
 # ============================================================
