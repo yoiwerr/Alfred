@@ -120,7 +120,7 @@ class ContextEngine:
         self.embedding_fn = embedding_fn        # embedding 函数 (可选)
 
         # ── 运行时状态 ──
-        self._running_summary: str = ""         # L2 滚动摘要
+        self._running_summaries: dict[str, str] = {}     # L2 滚动摘要 {session_id: summary}
         self._fact_store: dict[str, list[str]] = {}      # L3 内存后备 {session_id: [事实列表]}
         self._fact_timestamps: dict[str, list[int]] = {} # L3 事实时间戳
 
@@ -148,12 +148,16 @@ class ContextEngine:
         messages = session_store.get_conversation(session_id)
         ctx.turn_count = _count_turns(messages)
 
+        # ── 新会话: 重置该 session 的 L2 摘要 ──
+        if ctx.turn_count <= 1 and session_id in self._running_summaries:
+            self._running_summaries.pop(session_id, None)
+
         # ── 主题切换检测: 换话题时重置 L2 摘要 ──
-        if self._detect_topic_switch(current_message, ctx.turn_count):
+        if self._detect_topic_switch(current_message, ctx.turn_count, session_id):
             logger.info(
                 f"[ContextEngine] 检测到话题切换 (会话 {session_id}, 轮次 {ctx.turn_count})"
             )
-            self._running_summary = ""
+            self._running_summaries[session_id] = ""
             # 清空该会话的内存 L3 事实（旧话题偏好不污染新话题）
             if session_id in self._fact_store:
                 self._fact_store[session_id] = []
@@ -162,8 +166,8 @@ class ContextEngine:
         # ── L1: 最近 3 轮原文 ──
         ctx.l1_raw = _format_recent_history(messages, max_turns=self.L1_MAX_TURNS)
 
-        # ── L2: 滚动摘要 ──
-        ctx.l2_summary = self._running_summary
+        # ── L2: 滚动摘要（按 session 隔离）──
+        ctx.l2_summary = self._running_summaries.get(session_id, "")
 
         # ── L3: 语义事实检索（异步, PGVector + 内存后备）──
         ctx.l3_facts = await self._retrieve_facts(session_id, current_message)
@@ -216,7 +220,7 @@ class ContextEngine:
         if not new_turns_text.strip():
             return
 
-        old_summary = self._running_summary or "（这是对话的开始）"
+        old_summary = self._running_summaries.get(session_id, "") or "（这是对话的开始）"
         max_chars = self.max_summary_tokens * 3  # 粗略: 1 token ≈ 3 字符（中文约 1.5）
 
         prompt = (
@@ -245,7 +249,7 @@ class ContextEngine:
             if len(summary) > max_chars * 2:
                 summary = summary[:max_chars] + "..."
 
-            self._running_summary = summary
+            self._running_summaries[session_id] = summary
             self._last_summary_turn = turn_count
 
             logger.info(
@@ -259,7 +263,7 @@ class ContextEngine:
     # 主题切换检测
     # ============================================================
 
-    def _detect_topic_switch(self, current_message: str, turn_count: int) -> bool:
+    def _detect_topic_switch(self, current_message: str, turn_count: int, session_id: str) -> bool:
         """检测用户是否切换了话题，需要重置 L2 摘要。
 
         两级检测:
@@ -281,7 +285,8 @@ class ContextEngine:
         if turn_count <= 4:
             return False
 
-        if not self._running_summary:
+        running_summary = self._running_summaries.get(session_id, "")
+        if not running_summary:
             return False
 
         # ── L1 快检: keyword 重叠率 ──
@@ -290,7 +295,7 @@ class ContextEngine:
             return False
 
         # 从 L2 摘要中提取关键词
-        summary_keywords = set(_extract_query_keywords(self._running_summary))
+        summary_keywords = set(_extract_query_keywords(running_summary))
         all_old_keywords = summary_keywords
 
         # 也从 L3 事实中提取（如果有内存后备数据）

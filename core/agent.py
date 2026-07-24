@@ -113,7 +113,7 @@ class Agent:
                                    content=message, msg_type="input")
 
         # ── 记忆注入 ──
-        memory_context = await self._retrieve_memory(message)
+        memory_context = await self._retrieve_memory(message, session_id)
 
         # ── 加载上次契约（跨会话恢复）──
         contract_ctx = ""
@@ -224,7 +224,7 @@ class Agent:
         }}
 
         # ── 记忆注入 ──
-        memory_context = await self._retrieve_memory(message)
+        memory_context = await self._retrieve_memory(message, session_id)
 
         initial_state = await self._build_initial_state(
             message=message, module=module, background=background,
@@ -409,8 +409,24 @@ class Agent:
     # 记忆: 检索 + 摘要
     # ============================================================
 
-    async def _retrieve_memory(self, message: str) -> str:
-        """会话开始时检索相关历史 + 用户画像。"""
+    async def _retrieve_memory(self, message: str, session_id: str = "") -> str:
+        """检索相关历史 + 用户画像。
+
+        仅当用户消息明确表达「继续之前工作」时触发，避免新会话被旧记忆污染。
+        """
+        if not self.session_memory and not self.user_profile:
+            return ""
+
+        # ── 新会话首条消息：只有用户明确表示「继续」时才检索 ──
+        if session_id and self.sessions:
+            msgs = self.sessions.get_conversation(session_id)
+            turn_count = sum(1 for m in msgs if m.get("role") == "user")
+            if turn_count <= 1:
+                resume_signals = ["继续", "上次", "之前", "恢复", "接着", "接上", "回到", "前面", "刚才"]
+                if not any(sig in message for sig in resume_signals):
+                    logger.info(f"[Memory] 新会话首条消息，无继续信号，跳过记忆检索")
+                    return ""
+
         parts = []
 
         if self.session_memory:

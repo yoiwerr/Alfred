@@ -66,9 +66,10 @@ async def import_handover(
 
     # ── 将导入的项目记忆存入 context_engine 的 L2 运行状态 ──
     if _agent.context_engine:
-        existing = _agent.context_engine._running_summary or ""
+        import_session_id = f"imported_{file.filename or 'unknown'}"
+        existing = _agent.context_engine._running_summaries.get(import_session_id, "")
         imported_block = f"\n\n## 📥 导入的项目记忆\n{context_text}"
-        _agent.context_engine._running_summary = (existing + imported_block)[:4000]
+        _agent.context_engine._running_summaries[import_session_id] = (existing + imported_block)[:4000]
 
     logger.info(f"[Handover] 导入成功 → L2 上下文已注入")
 
