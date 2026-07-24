@@ -294,7 +294,7 @@ async def planner_node(state: AgentState, model=None, rag_service=None) -> dict:
     try:
         from models.task_contract import TaskContract
         tc = TaskContract.from_planner_json(plan, session_id="")
-        contract = tc.model_dump(by_alias=True)
+        contract = tc.model_dump(by_alias=True, mode="json")
     except Exception:
         # Pydantic 不可用时手动构建
         contract = plan.get("contract", {})

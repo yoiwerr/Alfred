@@ -1,9 +1,7 @@
 """
-项目交接卡 API。
+项目记忆导入 API。
 
-POST   /api/sessions/{id}/handover        — 生成交接卡 (返回 JSON)
-GET    /api/sessions/{id}/handover/download — 下载交接卡文件 (JSON 或 MD)
-POST   /api/sessions/import                — 上传交接卡恢复工作状态
+POST /api/sessions/import — 上传项目记忆文件 (.md/.json)，解析后注入 L2 上下文
 """
 
 import json
@@ -11,8 +9,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form, Query
-from fastapi.responses import PlainTextResponse, JSONResponse
+from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
@@ -28,113 +26,7 @@ def set_agent(agent):
 
 
 # ============================================================
-# 生成交接卡
-# ============================================================
-
-@router.post("/{session_id}/handover")
-async def generate_handover(session_id: str):
-    """
-    为指定会话生成项目交接卡。
-
-    返回 JSON:
-    {
-      "meta": {...},
-      "current_goal": "...",
-      "completed": [...],
-      "decisions": [...],
-      "open_issues": [...],
-      "next_steps": [...],
-      "key_files": [...],
-      "user_preferences": [...],
-      "verify_next_time": [...]
-    }
-    """
-    if _agent is None:
-        raise HTTPException(status_code=503, detail="Agent 未初始化")
-
-    session = _agent.sessions.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
-
-    # 获取该会话的契约
-    contract = None
-    if _agent.contract_store:
-        row = _agent.contract_store.get_latest(session_id)
-        if row:
-            contract = row.get("contract", {})
-
-    # 创建 HandoverService 并生成
-    from services.handover_service import HandoverService
-    svc = HandoverService(model=_agent.model)
-
-    handover = await svc.generate(
-        session_id=session_id,
-        session_store=_agent.sessions,
-        contract=contract,
-    )
-
-    return JSONResponse(content=handover)
-
-
-# ============================================================
-# 下载交接卡文件
-# ============================================================
-
-@router.get("/{session_id}/handover/download")
-async def download_handover(
-    session_id: str,
-    frmt: str = Query(default="md", alias="format", description="md | json"),
-):
-    """
-    下载交接卡文件。
-
-    GET /api/sessions/{id}/handover/download?format=md  → .md 文件
-    GET /api/sessions/{id}/handover/download?format=json → .json 文件
-    """
-    if _agent is None:
-        raise HTTPException(status_code=503, detail="Agent 未初始化")
-
-    session = _agent.sessions.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
-
-    contract = None
-    if _agent.contract_store:
-        row = _agent.contract_store.get_latest(session_id)
-        if row:
-            contract = row.get("contract", {})
-
-    from services.handover_service import HandoverService
-    svc = HandoverService(model=_agent.model)
-
-    handover = await svc.generate(
-        session_id=session_id,
-        session_store=_agent.sessions,
-        contract=contract,
-    )
-
-    session_title = (session.get("title") or "新对话").replace(" ", "_")[:30]
-
-    if frmt == "json":
-        content = HandoverService.to_json_str(handover)
-        filename = f"alfred_handover_{session_id}_{session_title}.json"
-        return PlainTextResponse(
-            content=content,
-            media_type="application/json",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-    else:
-        content = HandoverService.to_markdown(handover)
-        filename = f"alfred_handover_{session_id}_{session_title}.md"
-        return PlainTextResponse(
-            content=content,
-            media_type="text/markdown; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-
-
-# ============================================================
-# 导入交接卡
+# 导入项目记忆
 # ============================================================
 
 @router.post("/import")
@@ -142,9 +34,9 @@ async def import_handover(
     file: UploadFile = File(...),
 ):
     """
-    上传交接卡文件（.md 或 .json），解析后返回上下文注入文本。
+    上传项目记忆文件（.md 或 .json），解析后注入为 L2 上下文。
 
-    前端收到后可将此文本作为 extra_context 传入下一次对话。
+    前端收到后将 context_text 作为 extra_context 传入下一次对话。
     """
     if _agent is None:
         raise HTTPException(status_code=503, detail="Agent 未初始化")
@@ -169,10 +61,16 @@ async def import_handover(
     if not handover:
         raise HTTPException(status_code=400, detail="无法从文件中解析交接卡格式")
 
-    # 转为上下文文本
+    # 转为上下文文本 → 注入 L2
     context_text = HandoverService.to_context_string(handover)
 
-    logger.info(f"[Handover] 导入成功 session={handover.get('meta', {}).get('session_id', '?')}")
+    # ── 将导入的项目记忆存入 context_engine 的 L2 运行状态 ──
+    if _agent.context_engine:
+        existing = _agent.context_engine._running_summary or ""
+        imported_block = f"\n\n## 📥 导入的项目记忆\n{context_text}"
+        _agent.context_engine._running_summary = (existing + imported_block)[:4000]
+
+    logger.info(f"[Handover] 导入成功 → L2 上下文已注入")
 
     return JSONResponse(content={
         "ok": True,

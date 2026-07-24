@@ -212,9 +212,13 @@ class ContractStore:
             """UPDATE task_contracts
                SET contract = %s, status = 'confirmed', confirmed_at = NOW()
                WHERE contract_id = %s
-               ORDER BY version DESC LIMIT 1""",
+                 AND version = (
+                   SELECT MAX(version) FROM task_contracts tc2
+                   WHERE tc2.contract_id = %s
+                 )""",
             (
                 json.dumps(contract, ensure_ascii=False, default=str),
+                contract_id,
                 contract_id,
             ),
         )

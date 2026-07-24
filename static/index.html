@@ -26,10 +26,6 @@
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
       <span>读入项目记忆</span>
     </button>
-    <button class="btn-accent" id="btnDownload" onclick="openModal('modalDownload')">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      <span>下载记忆摘要</span>
-    </button>
   </div>
 </header>
 
@@ -171,28 +167,6 @@
   </div>
 </div>
 
-<div class="modal-overlay" id="modalDownload" onclick="closeModalBg(event)">
-  <div class="modal" onclick="event.stopPropagation()">
-    <h3 class="modal-title">下载项目交接卡</h3>
-    <p class="modal-body">阿福会根据当前对话生成一份结构化交接卡，包含目标、已完成事项、决策记录和下一步行动。</p>
-    <div class="modal-format-picker">
-      <label class="mf-option" id="mfMd" onclick="selectFormat('md')">
-        <span class="mf-radio"></span>
-        <span class="mf-label">Markdown</span>
-        <span class="mf-hint">人类可读，适合存档阅读</span>
-      </label>
-      <label class="mf-option" id="mfJson" onclick="selectFormat('json')">
-        <span class="mf-radio"></span>
-        <span class="mf-label">JSON</span>
-        <span class="mf-hint">机器可读，适合自动恢复</span>
-      </label>
-    </div>
-    <div class="modal-actions">
-      <button class="modal-btn modal-btn-cancel" onclick="closeModal('modalDownload')">取消</button>
-      <button class="modal-btn" id="btnDoDownload" onclick="doDownload()" disabled>下载</button>
-    </div>
-  </div>
-</div>
 
 <script src="js/chat.js"></script>
 </body>

@@ -257,6 +257,18 @@ class FeedbackRequest(BaseModel):
 # 健康检查
 # ============================================================
 
+class SaveMarkdownRequest(BaseModel):
+    """POST /api/files/save 请求体"""
+    title: str = Field(..., description="文档标题（用于生成文件名）")
+    content: str = Field(..., description="Markdown 内容")
+
+
+class SaveMarkdownResponse(BaseModel):
+    """POST /api/files/save 响应"""
+    filename: str
+    download_url: str
+
+
 class HealthResponse(BaseModel):
     """GET /api/health 响应"""
     status: str

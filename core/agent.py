@@ -41,7 +41,7 @@ class Agent:
         self._init_memory()
 
         # ── 工具服务注入（一次性，不需要每轮对话重复）──
-        inject_services(rag_service=rag_service, config=config)
+        inject_services(rag_service=rag_service, config=config, agent=self)
 
         # ── Skills ──
         from skills.prompt_refiner import PromptRefiner
@@ -239,27 +239,67 @@ class Agent:
             f"module={module}"
         )
 
-        # ── 用 ainvoke 而非 astream_events ──
-        # astream_events 只能捕获外层图节点的 LLM 事件（planner/router 等），
-        # execute_node 内部 create_react_agent 是子图，其 token 不会冒泡上来。
-        # 因此用 ainvoke 拿最终结果，再由 SSE 事件一次性推送完整输出。
+        # ── 用 astream 替代 ainvoke ──
+        # astream 在每个节点完成后立即 yield 状态更新，不等到全部结束。
+        # 这样可以在每个 LLM 调用完成后向前端推送进度事件，
+        # 用户能看到"正在分析→正在执行→正在检查"，而不是等两分钟无响应。
+        #
+        # astream_events 可以捕获 token 但 execute_node 内部子图的 token 不冒泡，
+        # 所以我们只用 astream 做节点级进度，不做 token 级流式。
         output = ""
         intent = {}
         new_clarify_round = clarify_round
         new_dims = dimensions or {}
         completeness = 0.0
         tool_results = []
+        multi_perspectives = {}
+        multi_synthesis = ""
+        plan = {}
+
+        # 节点 → 前端展示的进度文案
+        _NODE_PROGRESS = {
+            "router": "正在理解您的意图…",
+            "enrich": None,       # 纯数据加工，不展示
+            "rag": "正在检索知识库…",
+            "planner": "正在分析需求维度…",
+            "clarify": "正在整理追问…",
+            "engineering_check": "正在检查工程规范…",
+            "multi_agent": "多 Agent 并行分析中…",
+            "execute": "正在执行任务…",
+            "checkpoint": "正在校验结果…",
+            "reflect": "正在质检…",
+        }
 
         try:
-            result = await self.graph.ainvoke(initial_state)
+            async for chunk in self.graph.astream(initial_state, stream_mode="updates"):
+                # chunk 格式: {node_name: state_update_dict}
+                for node_name, node_state in chunk.items():
+                    # 推送进度事件（跳过无文案的节点）
+                    label = _NODE_PROGRESS.get(node_name)
+                    if label:
+                        yield {"event": "progress", "data": {
+                            "node": node_name,
+                            "label": label,
+                        }}
+                    # 收集最终状态（最后一个节点的输出就是结果）
+                    if "output" in (node_state or {}):
+                        output = node_state.get("output", "") or output
+                    if "intent" in (node_state or {}):
+                        intent = node_state.get("intent", intent)
+                    if "plan" in (node_state or {}):
+                        plan = node_state.get("plan", plan)
+                    if "expressed_dimensions" in (node_state or {}):
+                        new_dims = node_state.get("expressed_dimensions", new_dims)
+                    if "clarify_round" in (node_state or {}):
+                        new_clarify_round = node_state.get("clarify_round", new_clarify_round)
+                    if "tool_results" in (node_state or {}):
+                        tool_results = node_state.get("tool_results", tool_results)
+                    if "multi_agent_perspectives" in (node_state or {}):
+                        multi_perspectives = node_state.get("multi_agent_perspectives", {})
+                    if "multi_agent_synthesis" in (node_state or {}):
+                        multi_synthesis = node_state.get("multi_agent_synthesis", "")
 
-            output = result.get("output", "")
-            intent = result.get("intent", {})
-            plan = result.get("plan", {})
-            new_clarify_round = result.get("clarify_round", clarify_round)
-            new_dims = result.get("expressed_dimensions", dimensions or {})
-            completeness = plan.get("completeness", 0.0)
-            tool_results = result.get("tool_results", []) or []
+            completeness = plan.get("completeness", completeness)
 
         except Exception as e:
             logger.error(f"[Agent] Graph 执行失败: {e}", exc_info=True)
@@ -280,16 +320,14 @@ class Agent:
             }}
 
         # ── 推送多 Agent 事件 ──
-        multi_perspectives = result.get("multi_agent_perspectives", {})
         if multi_perspectives:
             from services.multi_agent import format_panel_for_sse
             for evt in format_panel_for_sse(multi_perspectives):
                 yield evt
-            synthesis = result.get("multi_agent_synthesis", "")
-            if synthesis:
+            if multi_synthesis:
                 yield {
                     "event": "multi_agent_synthesis",
-                    "data": {"synthesis": synthesis},
+                    "data": {"synthesis": multi_synthesis},
                 }
 
         # ── 推送工具调用事件（如果有的话）──

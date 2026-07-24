@@ -1,6 +1,6 @@
 /**
  * 阿福 AFU — AI 协作管家
- * 正式对话系统：SSE 流式 + 任务契约 + 多 Agent + 交接卡
+ * 请求-响应模式（无 SSE，无流式）
  */
 (function () {
   'use strict';
@@ -12,7 +12,7 @@
   var currentContract = null;
   var contractConfirmed = false;
   var hasStarted = false;
-  var isStreaming = false;
+  var isBusy = false;
   var importedContext = '';
   var currentModule = 'auto';
   var clarifyRound = 0;
@@ -32,7 +32,7 @@
      Turn Navigation (right sidebar)
      ═══════════════════════════════════════════════════════ */
   var turnCount = 0;
-  var pendingUserMsg = null;   // wait for afu reply before creating a turn node
+  var pendingUserMsg = null;
   var turnObserver = null;
 
   function initTurnObserver() {
@@ -57,7 +57,6 @@
     var idx = turnCount;
     var shortLabel = userLabel(userText);
 
-    // Create turn node in nav
     var list = document.getElementById('turnNavList');
     if (!list) return;
     var btn = document.createElement('button');
@@ -72,7 +71,6 @@
     btn.onclick = function() { scrollToTurn(idx); };
     list.appendChild(btn);
 
-    // Tag the afu message div (last child of messages) with data-turn
     var msgs = document.getElementById('messages');
     if (msgs) {
       var afuMsgs = msgs.querySelectorAll('.msg-afu');
@@ -82,7 +80,6 @@
         turnObserver.observe(lastAfu);
       }
     }
-    // Also tag user bubbles
     var userMsgs = document.getElementById('messages').querySelectorAll('.msg-user');
     var lastUser = userMsgs[userMsgs.length - 1];
     if (lastUser) lastUser.setAttribute('data-turn', idx);
@@ -108,10 +105,8 @@
   }
 
   function userLabel(text) {
-    // Generate a short label from user input
     var t = (text || '').replace(/\s+/g, ' ').trim();
     if (t.length <= 12) return t;
-    // Take first 10 chars + ...
     return t.substring(0, 10) + '…';
   }
 
@@ -267,10 +262,10 @@
   function escapeAttr(s) { if (!s) return ''; return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
   /* ═══════════════════════════════════════════════════════
-     Send Message → SSE Backend
+     Send Message → SSE (progress events only, no tokens)
      ═══════════════════════════════════════════════════════ */
   window.sendMessage = function () {
-    if (isStreaming) return;
+    if (isBusy) return;
     var input = document.getElementById('userInput');
     var text = input.value.trim();
     if (!text) return;
@@ -282,7 +277,9 @@
 
     appendUserMessage(text);
     setSendDisabled(true);
-    isStreaming = true;
+    isBusy = true;
+
+    var thinkingEl = appendThinking();
 
     var body = JSON.stringify({
       message: text,
@@ -294,20 +291,21 @@
       dimensions: accumulatedDimensions
     });
 
-    importedContext = '';  // consume once
+    importedContext = '';
 
-    fetch('/api/chat/stream?v=2', {
+    fetch('/api/chat/message', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: body
     }).then(function(response) {
       if (!response.ok) throw new Error('HTTP ' + response.status);
-      handleSSEStream(response);
+      handleSSEProgress(response, thinkingEl);
     }).catch(function(err) {
       console.error('[Chat] fetch failed:', err);
+      removeThinking(thinkingEl);
       appendAfuMessage('连接失败，请稍后重试。');
       setSendDisabled(false);
-      isStreaming = false;
+      isBusy = false;
     });
   };
 
@@ -320,19 +318,55 @@
   }
 
   /* ═══════════════════════════════════════════════════════
-     SSE Stream Reader
+     Thinking Indicator
      ═══════════════════════════════════════════════════════ */
-  function handleSSEStream(response) {
+  function appendThinking() {
+    var container = document.getElementById('messages');
+    var div = document.createElement('div');
+    div.className = 'msg msg-afu msg-thinking';
+    div.id = 'msgThinking';
+    var row = document.createElement('div');
+    row.className = 'msg-row';
+    row.innerHTML =
+      '<div class="msg-avatar"><img src="source/alfred.jpg" alt="阿福"></div>' +
+      '<div class="msg-body">' +
+        '<div class="msg-sender">阿福 <span class="msg-role">思考中…</span></div>' +
+        '<div class="msg-content msg-content-thinking">' +
+          '<span class="thinking-text">少爷稍等，正在思考</span>' +
+          '<span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span>' +
+        '</div>' +
+      '</div>';
+    div.appendChild(row);
+    container.appendChild(div);
+    scrollDown();
+    return div;
+  }
+
+  function removeThinking(el) {
+    if (el) el.remove();
+  }
+
+  /* ═══════════════════════════════════════════════════════
+     SSE Progress Reader — node-level events only
+     ═══════════════════════════════════════════════════════ */
+  function handleSSEProgress(response, thinkingEl) {
     var reader = response.body.getReader();
     var decoder = new TextDecoder();
     var buffer = '';
     var currentEvent = 'message';
 
+    function updateThinking(label) {
+      if (thinkingEl) {
+        var textEl = thinkingEl.querySelector('.thinking-text');
+        if (textEl) textEl.textContent = label;
+      }
+    }
+
     function processChunk() {
       reader.read().then(function(result) {
         if (result.done) {
           setSendDisabled(false);
-          isStreaming = false;
+          isBusy = false;
           return;
         }
         buffer += decoder.decode(result.value, { stream: true });
@@ -346,174 +380,90 @@
           } else if (line.startsWith('data: ')) {
             var dataStr = line.slice(6);
             try {
-              var data = JSON.parse(dataStr);
-              // The EventSourceResponse puts the full dict including event/data wrapper on data: line
-              // So we need to check both cases
-              if (data.event && data.data !== undefined) {
-                // sse-starlette format: data: {"event": "...", "data": {...}}
-                handleSSEPayload(data.event, data.data);
-              } else {
-                // Direct format: event: xxx\n data: {...}
-                handleSSEPayload(currentEvent, data);
+              var eventData = JSON.parse(dataStr);
+              // sse-starlette wraps: data: {"event": "...", "data": {...}}
+              var evType = eventData.event || currentEvent;
+              var payload = eventData.data !== undefined ? eventData.data : eventData;
+
+              switch (evType) {
+                case 'session':
+                  sessionId = payload.session_id;
+                  currentModule = payload.module || 'auto';
+                  break;
+
+                case 'progress':
+                  updateThinking(payload.label || payload.node);
+                  break;
+
+                case 'contract':
+                  if (payload.contract && payload.contract.goal) {
+                    renderContract(payload.contract);
+                  }
+                  break;
+
+                case 'tool_start':
+                  appendToolIndicator(payload.tool_name);
+                  break;
+
+                case 'multi_agent_perspective':
+                  appendPerspectiveCard(payload);
+                  break;
+
+                case 'multi_agent_synthesis':
+                  appendAfuMessage(payload.synthesis || '');
+                  break;
+
+                case 'clarify':
+                  removeThinking(thinkingEl);
+                  thinkingEl = null;
+                  appendAfuMessage(payload.message || '');
+                  clarifyRound = (clarifyRound || 0) + 1;
+                  break;
+
+                case 'execute':
+                  removeThinking(thinkingEl);
+                  thinkingEl = null;
+                  appendAfuMessage(payload.message || '');
+                  clarifyRound = 0;
+                  break;
+
+                case 'error':
+                  removeThinking(thinkingEl);
+                  thinkingEl = null;
+                  appendAfuMessage('出错了：' + (payload.detail || '未知错误'));
+                  break;
+
+                case 'done':
+                  // stream finished, already cleaned up by clarify/execute
+                  break;
               }
             } catch(e) {
-              // skip unparseable
+              // skip unparseable lines
             }
           }
         }
         processChunk();
       }).catch(function(err) {
         console.error('[SSE] read error:', err);
+        removeThinking(thinkingEl);
         appendAfuMessage('连接中断，请重试。');
         setSendDisabled(false);
-        isStreaming = false;
+        isBusy = false;
       });
     }
     processChunk();
   }
 
   /* ═══════════════════════════════════════════════════════
-     SSE Event Handlers
-     ═══════════════════════════════════════════════════════ */
-  var toolIndicatorEl = null;
-  var streamingMsgEl = null;
-  var streamingContent = '';
-
-  function handleSSEPayload(eventType, data) {
-    switch (eventType) {
-      case 'session':
-        sessionId = data.session_id;
-        currentModule = data.module || 'auto';
-        break;
-
-      case 'thinking':
-        // Agent is processing — could show a spinner
-        break;
-
-      case 'contract':
-        if (data.contract && data.contract.goal) {
-          renderContract(data.contract);
-        }
-        break;
-
-      case 'token':
-        // Token-level streaming — append to current message
-        if (!streamingMsgEl) {
-          streamingMsgEl = createStreamingMessage();
-          streamingContent = '';
-        }
-        streamingContent += data.content || '';
-        updateStreamingContent(streamingContent);
-        break;
-
-      case 'tool_start':
-        if (!toolIndicatorEl) {
-          toolIndicatorEl = createToolIndicator();
-        }
-        updateToolIndicator(toolIndicatorEl, data.tool_name || 'unknown', 'running');
-        break;
-
-      case 'tool_end':
-        if (toolIndicatorEl) {
-          updateToolIndicator(toolIndicatorEl, data.tool_name || 'unknown', 'done');
-          setTimeout(function() {
-            if (toolIndicatorEl) { toolIndicatorEl.remove(); toolIndicatorEl = null; }
-          }, 1500);
-        }
-        break;
-
-      case 'clarify':
-        finalizeStreaming();
-        appendAfuMessage(data.message || '');
-        clarifyRound = (clarifyRound || 0) + 1;
-        break;
-
-      case 'execute':
-        finalizeStreaming();
-        appendAfuMessage(data.message || '');
-        clarifyRound = 0;
-        break;
-
-      case 'multi_agent_perspective':
-        appendPerspectiveCard(data);
-        break;
-
-      case 'multi_agent_synthesis':
-        finalizeStreaming();
-        appendAfuMessage(data.synthesis || '');
-        break;
-
-      case 'error':
-        finalizeStreaming();
-        appendAfuMessage('出错了：' + (data.detail || '未知错误'));
-        break;
-
-      case 'done':
-        setSendDisabled(false);
-        isStreaming = false;
-        finalizeStreaming();
-        if (data.tokens_used > 0) {
-          console.log('[Chat] done. tokens:', data.tokens_used);
-        }
-        break;
-    }
-  }
-
-  function finalizeStreaming() {
-    if (streamingMsgEl) {
-      var contentEl = streamingMsgEl.querySelector('.msg-content');
-      if (contentEl) contentEl.innerHTML = simpleMarkdown(streamingContent);
-      streamingMsgEl = null;
-      streamingContent = '';
-    }
-  }
-
-  /* ═══════════════════════════════════════════════════════
      DOM Builders
      ═══════════════════════════════════════════════════════ */
-  function createStreamingMessage() {
+  function appendToolIndicator(name) {
     var container = document.getElementById('messages');
     var div = document.createElement('div');
-    div.className = 'msg msg-afu msg-streaming';
-    var row = document.createElement('div');
-    row.className = 'msg-row';
-    row.innerHTML =
-      '<div class="msg-avatar"><img src="source/alfred.jpg" alt="阿福"></div>' +
-      '<div class="msg-body">' +
-        '<div class="msg-sender">阿福 <span class="msg-role">输入中…</span></div>' +
-        '<div class="msg-content"></div>' +
-      '</div>';
-    div.appendChild(row);
+    div.className = 'msg msg-tool tool-done';
+    div.innerHTML = '<div class="tool-indicator"><span class="tool-name">' + escapeHtml(name) + '</span></div>';
     container.appendChild(div);
     scrollDown();
-    return div;
-  }
-
-  function updateStreamingContent(text) {
-    if (!streamingMsgEl) return;
-    var contentEl = streamingMsgEl.querySelector('.msg-content');
-    if (contentEl) contentEl.innerHTML = simpleMarkdown(text);
-    scrollDown();
-  }
-
-  function createToolIndicator() {
-    var container = document.getElementById('messages');
-    var div = document.createElement('div');
-    div.className = 'msg msg-tool';
-    div.innerHTML = '<div class="tool-indicator"><span class="tool-spinner"></span><span class="tool-name"></span></div>';
-    container.appendChild(div);
-    scrollDown();
-    return div;
-  }
-
-  function updateToolIndicator(el, name, state) {
-    var nameEl = el.querySelector('.tool-name');
-    var spinnerEl = el.querySelector('.tool-spinner');
-    if (nameEl) nameEl.textContent = name;
-    if (state === 'done') {
-      el.classList.add('tool-done');
-      if (spinnerEl) spinnerEl.style.display = 'none';
-    }
   }
 
   function appendUserMessage(text) {
@@ -547,11 +497,16 @@
     copyBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>复制</span>';
     copyBtn.onclick = function () { window.copyMessage(copyBtn, text); };
     copyRow.appendChild(copyBtn);
+    var dlBtn = document.createElement('button');
+    dlBtn.className = 'copy-btn dl-btn';
+    dlBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>.md</span>';
+    dlBtn.title = '下载为 Markdown 文件';
+    dlBtn.onclick = function () { downloadMd(text); };
+    copyRow.appendChild(dlBtn);
     div.appendChild(copyRow);
 
     container.appendChild(div);
 
-    // Turn node: user message + this afu reply = one turn
     if (pendingUserMsg) {
       addTurnNode(pendingUserMsg, text);
       pendingUserMsg = null;
@@ -583,41 +538,9 @@
   }
 
   /* ═══════════════════════════════════════════════════════
-     Handover Card — Download / Import
+     Handover Card — Import
      ═══════════════════════════════════════════════════════ */
-  var downloadFormat = 'md';
   var selectedFile = null;
-
-  window.selectFormat = function (fmt) {
-    downloadFormat = fmt;
-    var mdEl = document.getElementById('mfMd');
-    var jsonEl = document.getElementById('mfJson');
-    var btn = document.getElementById('btnDoDownload');
-    if (mdEl) mdEl.classList.toggle('active', fmt === 'md');
-    if (jsonEl) jsonEl.classList.toggle('active', fmt === 'json');
-    if (btn) btn.disabled = false;
-  };
-
-  window.doDownload = async function () {
-    var btn = document.getElementById('btnDoDownload');
-    if (!sessionId) { alert('请先发送一条消息开始对话'); return; }
-    if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
-    try {
-      var resp = await fetch('/api/sessions/' + sessionId + '/handover/download?format=' + downloadFormat);
-      if (!resp.ok) { var err = await resp.json().catch(function() { return {}; }); throw new Error(err.detail || 'HTTP ' + resp.status); }
-      var blob = await resp.blob();
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement('a');
-      a.href = url;
-      var disposition = resp.headers.get('Content-Disposition') || '';
-      var fnameMatch = disposition.match(/filename="?(.+?)"?$/);
-      a.download = fnameMatch ? fnameMatch[1] : 'alfred_handover.' + downloadFormat;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      closeModal('modalDownload');
-    } catch (e) { alert('下载失败：' + e.message); }
-    if (btn) { btn.disabled = false; btn.textContent = '下载'; }
-  };
 
   window.handleDragOver = function (e) { e.preventDefault(); e.stopPropagation(); };
   window.handleDrop = function (e) { e.preventDefault(); e.stopPropagation(); var files = e.dataTransfer.files; if (files.length > 0) setImportFile(files[0]); };
@@ -656,31 +579,6 @@
       }
     } catch (e) { alert('导入失败：' + e.message); }
     if (btn) { btn.disabled = false; btn.textContent = '导入'; }
-  };
-
-  var _origOpenModal = window.openModal;
-  window.openModal = function (id) {
-    if (id === 'modalImport') {
-      selectedFile = null;
-      var hint = document.getElementById('uploadHint');
-      var btn = document.getElementById('btnDoImport');
-      var area = document.getElementById('uploadArea');
-      var fileInput = document.getElementById('fileInput');
-      if (hint) hint.textContent = '支持 .md / .json 格式';
-      if (btn) btn.disabled = true;
-      if (area) area.classList.remove('has-file');
-      if (fileInput) fileInput.value = '';
-    }
-    if (id === 'modalDownload') {
-      downloadFormat = 'md';
-      var btn2 = document.getElementById('btnDoDownload');
-      if (btn2) btn2.disabled = true;
-      var mdEl = document.getElementById('mfMd');
-      var jsonEl = document.getElementById('mfJson');
-      if (mdEl) mdEl.classList.remove('active');
-      if (jsonEl) jsonEl.classList.remove('active');
-    }
-    _origOpenModal(id);
   };
 
   function formatSize(bytes) {
@@ -722,12 +620,20 @@
      ═══════════════════════════════════════════════════════ */
   function simpleMarkdown(text) {
     if (!text) return '';
+    // Extract links BEFORE escaping — escapeHtml turns [ ] into entities
+    var links = [];
+    text = text.replace(/\[([^\]]+)\]\((\/[^\s)]+)\)/g, function(match, label, url) {
+      links.push({label: label, url: url});
+      return '\x00L' + (links.length - 1) + '\x00';
+    });
     var html = escapeHtml(text);
-    // code blocks
+    // Restore links
+    for (var i = 0; i < links.length; i++) {
+      html = html.replace('\x00L' + i + '\x00',
+        '<a href="' + links[i].url + '" target="_blank" rel="noopener">' + links[i].label + '</a>');
+    }
     html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-    // inline code
     html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-    // tables
     html = html.replace(/(\n\|.*\|(?:\n\|[-| :]*\|)?(?:\n\|.*\|)+)/g, function(m) {
       var rows = m.trim().split('\n');
       var out = '<table class="msg-table">';
@@ -741,15 +647,11 @@
       }
       return out + '</table>';
     });
-    // bold
     html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    // headers
     html = html.replace(/^#### (.+)$/gm, '<h5>$1</h5>');
     html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>');
     html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>');
-    // hr
     html = html.replace(/^---$/gm, '<hr>');
-    // newlines
     html = html.replace(/\n\n/g, '</p><p>');
     html = html.replace(/\n/g, '<br>');
     return '<p>' + html + '</p>';
@@ -790,6 +692,17 @@
   };
 
   window.openModal = function (id) {
+    if (id === 'modalImport') {
+      selectedFile = null;
+      var hint = document.getElementById('uploadHint');
+      var btn = document.getElementById('btnDoImport');
+      var area = document.getElementById('uploadArea');
+      var fileInput = document.getElementById('fileInput');
+      if (hint) hint.textContent = '支持 .md / .json 格式';
+      if (btn) btn.disabled = true;
+      if (area) area.classList.remove('has-file');
+      if (fileInput) fileInput.value = '';
+    }
     var el = document.getElementById(id);
     if (el) el.classList.add('active');
   };
@@ -816,6 +729,26 @@
       navigator.clipboard.writeText(text).then(function () { showCopied(btn); }).catch(function () { fallbackCopy(btn, text); });
     } else { fallbackCopy(btn, text); }
   };
+
+  function downloadMd(text) {
+    var now = new Date();
+    var ts = now.getFullYear() +
+      ('0' + (now.getMonth() + 1)).slice(-2) +
+      ('0' + now.getDate()).slice(-2) + '_' +
+      ('0' + now.getHours()).slice(-2) +
+      ('0' + now.getMinutes()).slice(-2) +
+      ('0' + now.getSeconds()).slice(-2);
+    var filename = 'alfred_' + ts + '.md';
+    var blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 200);
+  }
 
   function fallbackCopy(btn, text) {
     var ta = document.createElement('textarea');
