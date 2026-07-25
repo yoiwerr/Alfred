@@ -8,35 +8,42 @@
 ```
 Browser (SSE Token Streaming)
     │
-    ▼ POST /api/chat/stream?v=2
-routers/chat.py  ← token 级流式 (V2) 或兼容模式 (V1)
+    ▼ POST /api/chat/message
+routers/chat.py  ← 节点级进度流式，通过 SSE 推送
     │
     ▼
 core/agent.py  (Agent 编排器)
     │
     ├─ process_message()        ← 兼容旧版，等图跑完一次性返回
-    └─ process_message_stream() ← V2，astream_events token 级流式
+    └─ process_message_stream() ← V2，astream 节点级流式
          │
          ▼
-core/graph.py  (LangGraph ReAct Agentic Loop)
+core/graph.py  (LangGraph V4 Agentic Loop)
     │
-    ├─ rag_retrieve → LangGraph 图:
-    │     START → planner → {clarify | execute → reflect → {retry | END}}
-    │
-    ├─ planner:   LLM JSON mode 提取维度 + 判断完整度
-    ├─ clarify:   动态生成追问 (模板兜底)
-    ├─ execute:   ReAct Agent (create_react_agent) tool calling loop
-    └─ reflect:   LLM 质量检查，不达标自动重试 (最多2次)
+    ├─ router  → 意图识别 + 模块自动路由
+    ├─ enrich  → Query 增强（上下文驱动）
+    ├─ rag     → 混合检索（Dense + BM25 Sparse → RRF → Rerank）
+    ├─ planner → LLM JSON mode 提取维度 + 判断完整度
+    ├─ clarify → 动态生成追问（任务契约引导）
+    ├─ engineering_check → 工程规范检测（建议/确认/阻断三级）
+    ├─ multi_agent → 三立场 Agent Panel（实用/稳健/创新并行）
+    ├─ execute → ReAct Agent tool calling loop
+    ├─ checkpoint → Planner 语义中枢，检查语义对齐
+    └─ reflect → LLM 质量检查，不达标自动重试 (最多2次)
          │
          ▼
     ┌─────────────┐  ┌────────────────┐  ┌──────────────┐
     │ tools/       │  │ services/      │  │ skills/      │
-    │ search_kb    │  │ rag_service    │  │ YAML 注册    │
-    │ search_web   │  │ session_store  │  │ base.py      │
-    │ search_hist  │  │ md_export      │  │ registry.py  │
-    │ python_exec  │  └────────────────┘  └──────────────┘
-    │ file_r/w     │
-    └─────────────┘
+    │ search_kb    │  │ rag_service    │  │ base.py      │
+    │              │  │ session_store  │  │ *.py 实现    │
+    └─────────────┘  │ vector_store   │  └──────────────┘
+                     │ contract_store │
+                     │ md_export      │
+                     │ multi_agent    │
+                     │ document_proc  │
+                     │ eng_advisor    │
+                     │ handover_svc   │
+                     └────────────────┘
 ```
 
 ## 本地开发
@@ -93,26 +100,36 @@ python -m pytest tests/ -v
 ## Docker 部署
 
 ```bash
-# Alfred 的 docker-compose.yml 自带 PostgreSQL 服务，一键启动
+# Alfred 依赖 PostgreSQL + PGVector，可用 Docker 一键启动 PG
 cp .env.example .env && vim .env
-docker compose up -d
+docker run -d --name alfred-pg \
+  -e POSTGRES_PASSWORD=yourpassword \
+  -e POSTGRES_DB=alfred \
+  -p 5432:5432 \
+  pgvector/pgvector:pg16
+python app.py
 # → http://localhost:8001
 ```
 
 ## 加新 Skill
 
-1. 创建 `skills/my_skill.yaml`:
-```yaml
-name: my_skill
-label: 我的技能
-icon: 🔧
-description: 一句话描述
-system_prompt: |
-  你是...（System Prompt）
-tools: [search_knowledge_base, search_web]
+1. 创建 `skills/my_skill.py`，继承 `skills/base.py` 的 `BaseSkill`:
+```python
+from skills.base import BaseSkill, SkillContext
+
+class MySkill(BaseSkill):
+    name = "my_skill"
+    label = "我的技能"
+    icon = "🔧"
+    description = "一句话描述"
+
+    async def execute(self, context: SkillContext, model) -> str:
+        # 实现技能逻辑
+        return "输出内容"
 ```
 
-2. 在 `skills/registry.py` 注册（或在 `core/agent.py` 中手动添加）
+2. 在 `prompts/system_prompts.py` 中添加对应的 System Prompt
+3. 在 `core/agent.py` 的 `__init__` 中注册
 
 ## 项目依赖
 
@@ -135,50 +152,83 @@ Alfred/
 │
 ├── core/
 │   ├── agent.py        ← Agent 编排器 (async, astream_events)
-│   ├── graph.py        ← LangGraph V2 ReAct Agentic Loop
+│   ├── graph.py        ← LangGraph V4 ReAct Agentic Loop
 │   ├── llm_client.py   ← 多 Provider LLM 工厂
-│   └── context_engine.py ← 三层上下文架构 (L1/L2/L3)
+│   ├── context_engine.py ← 三层上下文架构 (L1/L2/L3)
+│   └── router.py       ← 意图路由 (规则 + LLM 两阶段)
 │
 ├── routers/            ← FastAPI 路由
-│   ├── chat.py         ← 核心对话 (V1+V2 双模式 SSE)
-│   ├── sessions.py     ← 会话管理
+│   ├── chat.py         ← 核心对话 (SSE 流式 + 契约确认)
+│   ├── sessions.py     ← 会话管理 + Markdown 导出
 │   ├── knowledge.py    ← 知识库管理
-│   ├── feedback.py     ← 用户反馈
-│   └── files.py        ← 文件上传
+│   ├── feedback.py     ← 用户反馈 (👍👎)
+│   ├── files.py        ← 文件上传
+│   └── handover.py     ← 交接卡生成
 │
 ├── tools/
-│   └── search.py       ← @tool: search_kb / search_web / search_history
+│   └── search.py       ← @tool: search_knowledge_base
 │
 ├── skills/
-│   ├── base.py         ← 抽象基类 BaseSkill
+│   ├── base.py         ← 抽象基类 BaseSkill + SkillContext
 │   ├── prompt_refiner.py
 │   ├── work_arranger.py
-│   └── info_retention.py
+│   ├── info_retention.py
+│   └── code_review.py
 │
 ├── prompts/
 │   ├── system_prompts.py  ← Planner/Executor/Reflector + Skill Prompts
-│   └── templates.py       ← 维度定义 + 追问模板 + 工具函数
+│   └── templates.py       ← 维度定义 + 追问模板 + 契约格式化工具
 │
 ├── services/
-│   ├── rag_service.py     ← RAG 服务 (PGVector + 混合检索)
+│   ├── rag_service.py     ← RAG V5 (来源感知 + 混合检索 + 知识图谱)
 │   ├── session_store.py   ← PostgreSQL 会话持久化
 │   ├── vector_store.py    ← PGVector 向量存储
+│   ├── contract_store.py  ← 任务契约持久化
+│   ├── document_processor.py ← 文档解析 + SemanticChunker + SourceSplitter
+│   ├── engineering_advisor.py ← 工程规范顾问 (三级输出)
+│   ├── multi_agent.py     ← 三立场 Agent Panel
+│   ├── handover_service.py   ← 交接卡服务
 │   └── md_export.py       ← Markdown 导入导出
 │
 ├── models/
-│   └── schemas.py         ← Pydantic 模型 (含 V2 streaming 事件)
+│   ├── schemas.py         ← Pydantic 模型 (含 SSE 事件)
+│   └── task_contract.py   ← 任务契约 Pydantic 模型
+│
+├── memory/
+│   ├── session_memory.py  ← L2 跨会话记忆 (PGVector)
+│   └── user_profile.py    ← L3 用户画像 (PGVector)
 │
 ├── static/                ← 前端 (Vanilla JS + CSS)
 │   ├── index.html
 │   ├── css/style.css
-│   └── js/chat.js         ← V2 token 流式渲染 + 反馈
+│   └── js/chat.js         ← SSE 节点级渲染 + 反馈 + 交接卡
 │
 ├── knowledge_base/        ← 手写领域知识 (.md)
+│   ├── prompt_engineering.md
+│   ├── workflow_best_practices.md
+│   ├── tool_recommendations.md
+│   ├── tech_news.md
+│   ├── engineering/       ← 工程规范知识卡片
+│   ├── coding_skills/
+│   └── suggested_tools/   ← 工具推荐卡片集 (20张)
+│
 ├── tests/
-└── data/                  ← 运行时数据 (自动创建)
+└── data/                  ← 运行时数据 (日志 + 导出，自动创建)
 ```
 
 ## Session 记录
+
+### 2026-07-24 — RAG 来源感知 + 工具卡片
+
+- `rag_service.py`: `ingest_knowledge_base()` glob 修复为 `rglob("*.md")`（子目录原来被忽略）
+- `document_processor.py`: 新增 `SourceSplitter._extract_tool_cards()` — `suggested_tools/tools.md` 的 20 张工具卡片自动拆分为独立 Document，卡片级 frontmatter（name/category/source_url/risk_level）提取为独立 metadata
+- `ChunkBuilder`: dense/sparse 检索文本加入 `category` 字段，提升分类检索命中率
+
+### 2026-07-24 — 运维性修复
+
+- `.env` 对齐 `.env.example`：补充 15+ 项缺失字段
+- `requirements.txt` 同步 `pyproject.toml`：补充 pgvector/aiohttp/numpy/python-multipart
+- 多文件修复陈旧引用（SQLite→PostgreSQL、ChromaDB→PGVector、tools 列表更新）
 
 ### 2026-07-22 — 独立为 Alfred 项目
 

@@ -368,11 +368,48 @@ class SourceSplitter:
 
         单来源时返回一个 Document（source_refs 为空时用 source_meta）。
         多来源时每个 source_refs 生成一个独立 Document。
+        工具知识卡片集合时按 <!-- TOOL CARD --> 拆分，每张卡片独立 Document。
 
         Returns:
             [{document_id, source_metadata, source_refs, body_text}, ...]
         """
         documents = []
+
+        # ── 工具知识卡片集合检测 ──
+        tool_cards = SourceSplitter._extract_tool_cards(body)
+        if tool_cards:
+            parent_meta = source_meta.to_dict()
+            for i, card in enumerate(tool_cards):
+                doc_id = SourceSplitter._make_document_id(str(file_path), i)
+                # 卡片级元数据：继承父级 + 覆盖卡片特有字段
+                card_meta = dict(parent_meta)
+                card_meta["source_title"] = card["name"] or card_meta.get("source_title", file_path.stem)
+                card_meta["source_type"] = "tool_card"
+                card_meta["source_url"] = card.get("source_url") or card_meta.get("source_url", "")
+                card_meta["repository"] = card.get("source_repository") or card_meta.get("repository", "")
+                card_meta["extra"] = {
+                    **card_meta.get("extra", {}),
+                    "card_id": card.get("card_id", ""),
+                    "category": card.get("category", ""),
+                    "risk_level": card.get("risk_level", ""),
+                    "documentation_url": card.get("documentation_url", ""),
+                    "review_status": card.get("review_status", ""),
+                }
+
+                card_refs = [{
+                    "source_title": card["name"],
+                    "source_url": card.get("source_url", ""),
+                    "chunk_range": "all",
+                    "card_id": card.get("card_id", ""),
+                }]
+
+                documents.append({
+                    "document_id": doc_id,
+                    "source_metadata": card_meta,
+                    "source_refs": card_refs,
+                    "body_text": card["body"],
+                })
+            return documents
 
         if not source_refs:
             # 单来源
@@ -417,6 +454,72 @@ class SourceSplitter:
                 })
 
         return documents
+
+    @staticmethod
+    def _extract_tool_cards(body: str) -> list[dict]:
+        """从工具知识卡片集合中提取每张卡片的 frontmatter + 正文。
+
+        识别标记: <!-- TOOL CARD XX START --> ... <!-- TOOL CARD XX END -->
+        每张卡片内的 --- YAML frontmatter --- 提取为卡片级元数据。
+
+        Returns:
+            [{name, category, source_url, documentation_url, source_repository,
+              risk_level, card_id, review_status, body}, ...]
+            未检测到工具卡片时返回空列表。
+        """
+        if "<!-- TOOL CARD" not in body:
+            return []
+
+        pattern = r"<!-- TOOL CARD \d+ START -->(.*?)<!-- TOOL CARD \d+ END -->"
+        matches = re.findall(pattern, body, re.DOTALL)
+
+        if not matches:
+            return []
+
+        cards = []
+        for card_body in matches:
+            card_body = card_body.strip()
+            if not card_body:
+                continue
+
+            fm = {}
+            text = card_body
+            # 提取卡片级 YAML frontmatter（每张卡片以 --- 开头）
+            if card_body.startswith("---"):
+                parts = card_body.split("---", 2)
+                if len(parts) >= 3:
+                    frontmatter_text = parts[1].strip()
+                    text = parts[2].strip()
+                    for line in frontmatter_text.split("\n"):
+                        line = line.strip()
+                        if ":" not in line:
+                            continue
+                        key, _, value = line.partition(":")
+                        key = key.strip()
+                        value = value.strip().strip("\"'")
+                        if value and value not in ("", "null"):
+                            fm[key] = value
+
+            name = fm.get("name", "")
+            if not name:
+                # 兜底: 从正文的第一个 # 标题提取名称
+                title_match = re.match(r"^#\s+(.+)", text, re.MULTILINE)
+                if title_match:
+                    name = title_match.group(1).strip()[:120]
+
+            cards.append({
+                "name": name,
+                "category": fm.get("category", ""),
+                "source_url": fm.get("source_url", ""),
+                "documentation_url": fm.get("documentation_url", ""),
+                "source_repository": fm.get("source_repository", ""),
+                "risk_level": fm.get("risk_level", ""),
+                "card_id": fm.get("card_id", ""),
+                "review_status": fm.get("review_status", ""),
+                "body": text,
+            })
+
+        return cards
 
     @staticmethod
     def _make_document_id(file_path: str, index: int) -> str:
@@ -626,8 +729,11 @@ class ChunkBuilder:
             entity_names = chunk_data.get("entity_names", [])
 
             # 稠密检索文本
+            extra = source_meta.get("extra", {})
+            category = extra.get("category", source_meta.get("category", "")) if isinstance(extra, dict) else ""
             search_dense = ChunkBuilder._build_dense_search_text(
                 source_title=source_meta.get("source_title", ""),
+                category=category,
                 entity_names=entity_names,
                 section_title=section_title,
                 body=body,
@@ -639,6 +745,7 @@ class ChunkBuilder:
                 url=source_meta.get("source_url", ""),
                 author=source_meta.get("author", ""),
                 entity_names=entity_names,
+                category=category,
             )
 
             result.append({
@@ -666,11 +773,14 @@ class ChunkBuilder:
         entity_names: list[str],
         section_title: str,
         body: str,
+        category: str = "",
     ) -> str:
-        """构建稠密检索文本: source_title + entity_names + section_title + body。"""
+        """构建稠密检索文本: source_title + category + entity_names + section_title + body。"""
         parts = []
         if source_title:
             parts.append(source_title)
+        if category:
+            parts.append(category)
         if entity_names:
             parts.append(" ".join(entity_names[:10]))
         if section_title:
@@ -684,8 +794,9 @@ class ChunkBuilder:
         url: str,
         author: str,
         entity_names: list[str],
+        category: str = "",
     ) -> str:
-        """构建稀疏索引文本: repository + url + author + proper nouns。"""
+        """构建稀疏索引文本: repository + url + author + category + proper nouns。"""
         parts = []
         if repository:
             parts.append(repository)
@@ -693,6 +804,8 @@ class ChunkBuilder:
             parts.append(url)
         if author:
             parts.append(author)
+        if category:
+            parts.append(category)
         if entity_names:
             parts.append(" ".join(entity_names[:8]))
         return " ".join(parts) if parts else ""

@@ -110,9 +110,7 @@ class RAGService:
         Returns:
             {new_chunks, new_sources, new_documents}
         """
-        md_files = []
-        for pattern in ["*.md"]:
-            md_files.extend(self.kb_dir.glob(pattern))
+        md_files = list(self.kb_dir.rglob("*.md"))
         if not md_files:
             logger.info("[RAG] knowledge_base/ 为空")
             return {"chunks": 0, "sources": 0, "documents": 0}

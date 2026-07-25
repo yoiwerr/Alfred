@@ -1,12 +1,13 @@
 """
-Alfred 工具注册表 — 6 个工具（3 个活跃 + 3 个预留）。
+Alfred 工具注册表 — 7 个工具（4 个 Skill 共享 + 3 个预留）。
 
 每个工具有明确的责任边界，无功能重叠：
 
-  活跃 (所有 Skill 共用):
+  Skill 共享 (所有 Skill 可用):
     search_knowledge_base    — 读：PGVector 向量检索领域知识    [P0 必须]
     add_to_knowledge_base    — 写：对话知识持久化到向量库       [用户触发]
     save_project_memory      — 基于三层记忆生成项目记忆 .md    [用户触发]
+    export_markdown          — 导出文档为 .md 供下载            [用户触发]
 
   预留 (未分配给 Skill，仅 ALL_TOOLS 持有):
     python_exec              — 沙箱 Python：精确计算/格式转换    [预留]

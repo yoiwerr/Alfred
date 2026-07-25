@@ -455,10 +455,6 @@ async def save_project_memory(
 
     # ── 收集三层记忆 + 契约 ──
     try:
-        # 从 context_engine 获取 L2/L3
-        if _agent.context_engine:
-            l2_text = _agent.context_engine._running_summary or ""
-
         # 尝试获取当前 session（从最近的消息推断）
         if _agent.sessions:
             recent = _agent.sessions.list_sessions(limit=1)
@@ -473,6 +469,10 @@ async def save_project_memory(
                         content = m.get("content", "")
                         lines.append(f"### {role}\n{content[:800]}\n")
                     l1_text = "\n".join(lines)
+
+        # 从 context_engine 获取 L2 滚动摘要（依赖 session_id）
+        if _agent.context_engine and session_id:
+            l2_text = _agent.context_engine._running_summaries.get(session_id, "") or ""
 
         # 契约
         if _agent.contract_store and session_id:

@@ -3,7 +3,7 @@ Agent 封装层 — FastAPI 的统一入口。V2。
 
 职责:
 1. 封装 LangGraph 图的调用细节
-2. 管理会话持久化（SQLite）
+2. 管理会话持久化（PostgreSQL）
 3. 协调 Skills + 6 核心 Tools
 4. astream_events() 支持真正的 token 级流式输出
 5. 记忆系统: 会话开始检索历史 + 画像 / 会话结束自动摘要
@@ -59,6 +59,7 @@ class Agent:
         # ── LangGraph 图 ──
         self.graph = create_graph(
             rag_service=rag_service, skills=self.skills, model=model,
+            config=config,
         )
 
     def _init_memory(self):
@@ -526,6 +527,12 @@ class Agent:
 
     def list_sessions(self, module=None):
         return self.sessions.list_sessions(module=module)
+
+    async def delete_session(self, session_id):
+        """删除会话及其关联的记忆缓存。"""
+        self.sessions.delete_session(session_id)
+        if self.context_engine:
+            await self.context_engine.cleanup_session(session_id)
 
     def export_session(self, session_id):
         from services.md_export import export_session_to_md

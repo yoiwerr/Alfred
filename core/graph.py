@@ -45,12 +45,15 @@ from prompts.system_prompts import (
 
 logger = logging.getLogger(__name__)
 
-# ── 常量 ──
+# ── 常量（默认值，可被 config 覆写）──
 MAX_REFLECTION_RETRIES = 2
 DEFAULT_MAX_TOOL_ROUNDS = 10
-CLARIFY_THRESHOLD = 0.75
-MAX_CLARIFY_ROUNDS = 3
+DEFAULT_CLARIFY_THRESHOLD = 0.75
+DEFAULT_MAX_CLARIFY_ROUNDS = 3
 MAX_CHECKPOINT_RETRIES = 1     # checkpoint 失败最多重试 1 次
+
+# ── 运行时阈值（create_graph 中从 config 覆写）──
+max_clarify_rounds = DEFAULT_MAX_CLARIFY_ROUNDS
 
 
 # ============================================================
@@ -814,7 +817,7 @@ async def multi_agent_execute_node(state: AgentState, model=None) -> dict:
 def route_after_planner(state: AgentState) -> Literal["clarify", "engineering_check"]:
     plan = state.get("plan", {})
     clarify_round = state.get("clarify_round", 0)
-    if not plan.get("is_complete", False) and clarify_round < MAX_CLARIFY_ROUNDS:
+    if not plan.get("is_complete", False) and clarify_round < max_clarify_rounds:
         return "clarify"
     return "engineering_check"
 
@@ -873,22 +876,28 @@ def _build_advisor(rag_service=None):
         return None
 
 
-def create_graph(rag_service=None, skills=None, model=None):
+def create_graph(rag_service=None, skills=None, model=None, config=None):
     """
     构建 LangGraph 状态图 (V4 — Planner 语义中枢 + 三层上下文 + 工程规范）。
 
     流程:
       START → router → enrich → rag → planner → {clarify | engineering_check}
                                                                     ↓
-                                          engineering_check → {execute | END(block)}
+                                          engineering_check → {execute | multi_agent | END(block)}
                                                                     ↓
-                                                          execute → checkpoint → {reflect | execute}
-                                                                                      ↓
-                                                                                reflect → {execute | END}
+                                          execute → checkpoint → {reflect | execute}
+                                          multi_agent → checkpoint → {reflect | execute}
+                                                                    ↓
+                                                              reflect → {execute | END}
 
     新增: engineering_check — 按任务节点触发，不是固定模块。
           检测工程场景 → 检索知识卡片 → 三级输出（建议/确认/阻断）。
     """
+    # ── 从 config 读取阈值，覆写模块级变量 ──
+    global max_clarify_rounds
+    if config:
+        max_clarify_rounds = getattr(config, "max_clarify_rounds", DEFAULT_MAX_CLARIFY_ROUNDS) or DEFAULT_MAX_CLARIFY_ROUNDS
+
     workflow = StateGraph(AgentState)
 
     async def _router(state):     return await router_node(state, model)
@@ -927,8 +936,8 @@ def create_graph(rag_service=None, skills=None, model=None):
         "engineering_check", route_after_engineering,
         {"execute": "execute", "multi_agent": "multi_agent", "__end__": END},
     )
-    # ── multi_agent → reflect → END ──
-    workflow.add_edge("multi_agent", "reflect")
+    # ── multi_agent → checkpoint → {reflect | execute} ──
+    workflow.add_edge("multi_agent", "checkpoint")
     # ── execute → checkpoint → {reflect | execute} ──
     workflow.add_edge("execute", "checkpoint")
     workflow.add_conditional_edges(
@@ -1173,9 +1182,6 @@ def _build_locked_block(intent: dict, dims_text: str, turn_count: int) -> str:
 
 
 async def _execute_legacy_skill(skill_instance, state: dict, model) -> str:
-    from langchain.agents import create_agent
-    from langchain_core.messages import SystemMessage, HumanMessage
-    from tools import get_tools_for_skill
     from skills.base import SkillContext
 
     message = state.get("messages", [])
